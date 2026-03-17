@@ -507,14 +507,16 @@
             pendingPrompt = result;
             log('info', '📝 Prompt composed', {
                 prompt: result.prompt,
+                styles: result.styles,
+                title: result.title,
                 strategy: result.meta.strategy,
                 inherited: result.meta.inherited,
                 evolved: result.meta.evolved,
             });
 
             if (settings.mode === MODE.MANUAL_CREATE) {
-                log('info', '🖐️ [MANUAL-CREATE] Prompt ready. Attempting to fill input field...');
-                attemptFillPrompt(result.prompt);
+                log('info', '🖐️ [MANUAL-CREATE] Prompt ready. Attempting to fill input fields...');
+                attemptFillPrompt(result.prompt, result.styles, result.title);
                 // In manual-create, we go to ARMED_FOR_SWITCH, user clicks Create
                 fsm.transition(STATE.ARMED_FOR_SWITCH, 'manual-create: prompt filled, waiting user');
             } else if (settings.mode === MODE.AUTO_CREATE) {
@@ -540,7 +542,7 @@
         try {
             // Fill prompt first
             if (pendingPrompt) {
-                attemptFillPrompt(pendingPrompt.prompt);
+                attemptFillPrompt(pendingPrompt.prompt, pendingPrompt.styles, pendingPrompt.title);
             }
 
             // Find and click Create button
@@ -637,49 +639,81 @@
      * ==================================================================== */
 
     /**
-     * Attempt to fill the prompt input field.
-     * ⚠️ HYPOTHETICAL — selectors not verified.
-     * @param {string} promptText
+     * Attempt to fill the prompt/lyrics/styles fields on the create page.
+     * Uses VERIFIED selectors from live DOM inspection.
+     * @param {string} promptText - the main prompt/lyrics text
+     * @param {string} [stylesText] - optional styles text
+     * @param {string} [titleText] - optional song title
      */
-    function attemptFillPrompt(promptText) {
-        const inputResult = findBestCandidate(PROMPT_INPUT_CANDIDATES);
-        if (!inputResult) {
-            log('warn', '⚠️ Prompt input field not found — cannot fill');
-            return;
-        }
-
-        const el = inputResult.element;
-        log('info', `📝 Found prompt input: <${el.tagName}> via "${inputResult.candidate.description}"`);
-
+    function attemptFillPrompt(promptText, stylesText, titleText) {
         if (settings.mode === MODE.DRY_RUN) {
-            log('info', `🔍 [DRY-RUN] Would fill with: "${promptText}"`);
+            log('info', `🔍 [DRY-RUN] Would fill lyrics: "${promptText}"`);
+            if (stylesText) log('info', `🔍 [DRY-RUN] Would fill styles: "${stylesText}"`);
+            if (titleText) log('info', `🔍 [DRY-RUN] Would fill title: "${titleText}"`);
             return;
         }
 
+        // --- Fill lyrics textarea (data-testid="lyrics-textarea") ---
+        if (promptText) {
+            const lyricsResult = findBestCandidate(LYRICS_INPUT_CANDIDATES);
+            if (lyricsResult) {
+                fillInputElement(lyricsResult.element, promptText, 'lyrics');
+            } else {
+                log('warn', '⚠️ Lyrics textarea not found — cannot fill');
+            }
+        }
+
+        // --- Fill styles textarea (maxlength="1000") ---
+        if (stylesText) {
+            const stylesResult = findBestCandidate(STYLES_INPUT_CANDIDATES);
+            if (stylesResult) {
+                fillInputElement(stylesResult.element, stylesText, 'styles');
+            } else {
+                log('warn', '⚠️ Styles textarea not found — cannot fill');
+            }
+        }
+
+        // --- Fill song title input ---
+        if (titleText) {
+            const titleResult = findBestCandidate(TITLE_INPUT_CANDIDATES);
+            if (titleResult) {
+                fillInputElement(titleResult.element, titleText, 'title');
+            } else {
+                log('warn', '⚠️ Title input not found — cannot fill');
+            }
+        }
+    }
+
+    /**
+     * Fill a single input/textarea element, dispatching events for React.
+     * @param {HTMLElement} el
+     * @param {string} value
+     * @param {string} fieldName - for logging
+     */
+    function fillInputElement(el, value, fieldName) {
         try {
             if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-                // Set value and dispatch input event for React
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                    window.HTMLTextAreaElement.prototype, 'value'
-                )?.set || Object.getOwnPropertyDescriptor(
-                    window.HTMLInputElement.prototype, 'value'
-                )?.set;
+                // Use native setter to bypass React's controlled input
+                const proto = el.tagName === 'TEXTAREA'
+                    ? window.HTMLTextAreaElement.prototype
+                    : window.HTMLInputElement.prototype;
+                const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
 
-                if (nativeInputValueSetter) {
-                    nativeInputValueSetter.call(el, promptText);
+                if (nativeSetter) {
+                    nativeSetter.call(el, value);
                 } else {
-                    el.value = promptText;
+                    el.value = value;
                 }
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
             } else if (el.contentEditable === 'true') {
-                el.textContent = promptText;
+                el.textContent = value;
                 el.dispatchEvent(new Event('input', { bubbles: true }));
             }
 
-            log('info', '✅ Prompt text filled');
+            log('info', `✅ ${fieldName} field filled`);
         } catch (err) {
-            log('error', 'Failed to fill prompt', err.message);
+            log('error', `Failed to fill ${fieldName}`, err.message);
         }
     }
 

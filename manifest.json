@@ -5,11 +5,11 @@
   "description": "Nonstop generation assistant for Suno — monitors playback and prepares next tracks automatically.",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
   "background": {
-    "service_worker": "service_worker.js",
-    "type": "module"
+    "service_worker": "service_worker.js"
   },
   "content_scripts": [
     {

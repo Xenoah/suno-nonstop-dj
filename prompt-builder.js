@@ -72,23 +72,29 @@ function buildNextPrompt(context, strategy = STRATEGY.BALANCED) {
         contextConfidence: context.confidence || 'low',
     };
 
-    const parts = [];
+    const styleParts = [];
+    const lyricsParts = [];
+    let title = '';
 
     // --- INHERIT: carry over core elements ---
-    if (context.tags && context.tags.length > 0) {
-        // Keep genre/style tags
+    if (context.style) {
+        // Carry over existing style text (from styles textarea)
+        styleParts.push(context.style);
+        meta.inherited.push(`styles: ${context.style}`);
+    } else if (context.tags && context.tags.length > 0) {
+        // Use tags as styles
         const kept = context.tags.slice(0, 5);
-        parts.push(kept.join(', '));
-        meta.inherited.push(`tags: ${kept.join(', ')}`);
+        styleParts.push(kept.join(', '));
+        meta.inherited.push(`tags as styles: ${kept.join(', ')}`);
     }
 
     if (context.genre) {
-        parts.push(context.genre);
+        styleParts.push(context.genre);
         meta.inherited.push(`genre: ${context.genre}`);
     }
 
     if (context.mood) {
-        parts.push(context.mood);
+        styleParts.push(context.mood);
         meta.inherited.push(`mood: ${context.mood}`);
     }
 
@@ -99,16 +105,18 @@ function buildNextPrompt(context, strategy = STRATEGY.BALANCED) {
     const energyHint = energyPool[Math.floor(Math.random() * energyPool.length)];
     const structHint = structPool[Math.floor(Math.random() * structPool.length)];
 
-    parts.push(energyHint);
-    parts.push(structHint);
+    // Add energy/structure hints to lyrics instead of styles
+    lyricsParts.push(energyHint);
+    lyricsParts.push(structHint);
     meta.evolved.push(energyHint, structHint);
 
     // --- AVOID: prevent repetition ---
     if (context.title) {
         meta.avoided.push(`Avoid repeating title words from: "${context.title}"`);
+        // Generate a continuation title
+        title = `${context.title} (continuation)`;
     }
 
-    // If we have lyrics, note to avoid repetition
     if (context.lyrics) {
         const firstLine = context.lyrics.split('\n')[0] || '';
         if (firstLine.length > 0) {
@@ -117,7 +125,8 @@ function buildNextPrompt(context, strategy = STRATEGY.BALANCED) {
     }
 
     // --- ASSEMBLE ---
-    let prompt = parts.filter(Boolean).join(', ');
+    let styles = styleParts.filter(Boolean).join(', ');
+    let prompt = lyricsParts.filter(Boolean).join(', ');
 
     // If context was very thin, produce a generic continuation prompt
     if (!prompt || prompt.length < 10) {
@@ -125,14 +134,14 @@ function buildNextPrompt(context, strategy = STRATEGY.BALANCED) {
         meta.inherited.push('(fallback — insufficient context)');
     }
 
-    // Strategy-specific prefix
+    // Strategy-specific prefix for the lyrics/prompt
     if (strategy === STRATEGY.ADVENTUROUS) {
         prompt = `An adventurous evolution: ${prompt}`;
     } else if (strategy === STRATEGY.CONSERVATIVE) {
         prompt = `A natural continuation: ${prompt}`;
     }
 
-    return { prompt, meta };
+    return { prompt, styles, title, meta };
 }
 
 /**

@@ -2,8 +2,15 @@
  * @file selectors.js
  * @description DOM selector candidates with scoring for Suno Nonstop DJ.
  *
- * Phase 1: Stub — only AUDIO_ELEMENT_ID is used.
- * Phase 2+: Will contain scored selector candidates for title, cards, buttons, etc.
+ * UPDATED: 2026-03-17 — Based on live DOM inspection of suno.com/create.
+ * The Suno create page uses Chakra UI (CSS-in-JS with Emotion).
+ * Key findings:
+ *   - textarea[data-testid="lyrics-textarea"] is CONFIRMED
+ *   - Styles textarea uses maxlength="1000"
+ *   - Song title uses input[placeholder="Song Title (Optional)"]
+ *   - Buttons use data-button-id and data-context-menu-trigger
+ *   - Style tags use aria-label="Add style: ..."
+ *   - Song Description textarea is in a separate section
  *
  * DESIGN PRINCIPLE: All DOM-structure-dependent logic is centralised here.
  * When Suno's DOM changes, update ONLY this file.
@@ -23,21 +30,43 @@
  * ======================================================================== */
 
 /**
+ * Selector candidates for the Song Title input on the create page.
+ * ✅ VERIFIED against live DOM 2026-03-17
+ * @type {Array<Object>}
+ */
+const TITLE_INPUT_CANDIDATES = [
+    {
+        description: 'Song Title input by placeholder (verified)',
+        selector: 'input[placeholder="Song Title (Optional)"]',
+        score: 90,
+        basis: 'placeholder',
+        verified: true,
+    },
+    {
+        description: 'Song Title input — fallback by class pattern near music note SVG',
+        selector: '.e1ri0ifz1 input',
+        score: 30,
+        basis: 'class',
+        verified: true,
+    },
+];
+
+/**
  * Selector candidates for the currently playing track title.
- * ⚠️ HYPOTHETICAL — not yet verified against live DOM.
+ * These are for the PLAYER BAR (bottom), not the create form.
+ * ⚠️ PARTIALLY VERIFIED — player bar DOM not yet provided.
  * @type {Array<Object>}
  */
 const TITLE_CANDIDATES = [
-    // --- These are HYPOTHETICAL candidates. Must be verified via DevTools. ---
     {
         description: 'aria-label containing "now playing" on a heading or span',
-        selector: '[aria-label*="now playing"], [aria-label*="Now Playing"]',
+        selector: '[aria-label*="now playing" i], [aria-label*="Now Playing"]',
         score: 60,
         basis: 'aria',
         verified: false,
     },
     {
-        description: 'data-testid for track title (common in React apps)',
+        description: 'data-testid for track title',
         selector: '[data-testid="track-title"], [data-testid="song-title"]',
         score: 55,
         basis: 'data-attr',
@@ -54,7 +83,7 @@ const TITLE_CANDIDATES = [
 
 /**
  * Selector candidates for song cards in the library/playlist.
- * ⚠️ HYPOTHETICAL
+ * ⚠️ PARTIALLY VERIFIED — library page DOM not yet provided.
  * @type {Array<Object>}
  */
 const CARD_CANDIDATES = [
@@ -76,7 +105,7 @@ const CARD_CANDIDATES = [
 
 /**
  * Selector candidates for the play button on a song card.
- * ⚠️ HYPOTHETICAL
+ * ⚠️ PARTIALLY VERIFIED
  * @type {Array<Object>}
  */
 const PLAY_BUTTON_CANDIDATES = [
@@ -98,17 +127,25 @@ const PLAY_BUTTON_CANDIDATES = [
 
 /**
  * Selector candidates for the Create / Generate button.
- * ⚠️ HYPOTHETICAL
+ * The create page has a "Create" button at the bottom of the form.
+ * ⚠️ PARTIALLY VERIFIED — button text confirmed but full selector not confirmed.
  * @type {Array<Object>}
  */
 const CREATE_BUTTON_CANDIDATES = [
     {
-        description: 'button whose text content is "Create" or "Generate"',
-        selector: 'button',  // filtered by textContent in dom-explorer
-        score: 50,
+        description: 'Button with text "Create" (case-insensitive)',
+        selector: 'button',
+        score: 60,
         basis: 'label',
         verified: false,
-        textMatch: /^(create|generate)$/i,
+        textMatch: /^create$/i,
+    },
+    {
+        description: 'Button with aria-label containing "Create"',
+        selector: 'button[aria-label*="Create" i]',
+        score: 65,
+        basis: 'aria',
+        verified: false,
     },
     {
         description: 'data-testid for create button',
@@ -120,53 +157,151 @@ const CREATE_BUTTON_CANDIDATES = [
 ];
 
 /**
- * Selector candidates for the prompt input field.
- * ⚠️ HYPOTHETICAL
+ * Selector candidates for the LYRICS textarea on the create page.
+ * ✅ VERIFIED against live DOM 2026-03-17
  * @type {Array<Object>}
  */
-const PROMPT_INPUT_CANDIDATES = [
+const LYRICS_INPUT_CANDIDATES = [
     {
-        description: 'textarea for prompt input',
-        selector: 'textarea[placeholder*="prompt" i], textarea[placeholder*="describe" i], textarea[aria-label*="prompt" i]',
-        score: 60,
-        basis: 'aria',
-        verified: false,
-    },
-    {
-        description: 'contenteditable div for prompt',
-        selector: 'div[contenteditable="true"]',
-        score: 30,
-        basis: 'tag',
-        verified: false,
-    },
-    {
-        description: 'data-testid for prompt input',
-        selector: '[data-testid="prompt-input"], [data-testid="prompt-textarea"]',
-        score: 55,
+        description: 'Lyrics textarea by data-testid (VERIFIED)',
+        selector: 'textarea[data-testid="lyrics-textarea"]',
+        score: 100,
         basis: 'data-attr',
-        verified: false,
+        verified: true,
+    },
+    {
+        description: 'Lyrics textarea by placeholder content',
+        selector: 'textarea[placeholder*="lyrics" i]',
+        score: 75,
+        basis: 'placeholder',
+        verified: true,
     },
 ];
 
 /**
- * Selector candidates for lyrics / description fields.
- * ⚠️ HYPOTHETICAL
+ * Selector candidates for the STYLES textarea on the create page.
+ * ✅ VERIFIED against live DOM 2026-03-17
+ * The styles textarea has maxlength="1000" and is in the "Styles" section.
+ * @type {Array<Object>}
+ */
+const STYLES_INPUT_CANDIDATES = [
+    {
+        description: 'Styles textarea by maxlength=1000 (VERIFIED)',
+        selector: 'textarea[maxlength="1000"]',
+        score: 85,
+        basis: 'attr',
+        verified: true,
+    },
+];
+
+/**
+ * Selector candidates for the SONG DESCRIPTION textarea.
+ * ✅ PARTIALLY VERIFIED — present in "Song Description" collapsible section.
+ * @type {Array<Object>}
+ */
+const DESCRIPTION_INPUT_CANDIDATES = [
+    {
+        description: 'Song Description textarea (third textarea, no data-testid or maxlength)',
+        selector: '.efvek1x1 textarea, .efvek1x0 textarea',
+        score: 50,
+        basis: 'class',
+        verified: true,
+    },
+];
+
+/**
+ * Selector candidates for style suggestion buttons.
+ * ✅ VERIFIED against live DOM 2026-03-17
+ * @type {Array<Object>}
+ */
+const STYLE_TAG_CANDIDATES = [
+    {
+        description: 'Style suggestion buttons by aria-label "Add style: ..." (VERIFIED)',
+        selector: 'button[aria-label^="Add style:"]',
+        score: 95,
+        basis: 'aria',
+        verified: true,
+    },
+];
+
+/**
+ * Selector candidates for display of lyrics (read only, in player/detail view).
+ * ⚠️ NOT YET VERIFIED
  * @type {Array<Object>}
  */
 const LYRICS_CANDIDATES = [
     {
-        description: 'textarea for lyrics',
-        selector: 'textarea[placeholder*="lyrics" i], textarea[aria-label*="lyrics" i]',
-        score: 55,
-        basis: 'aria',
-        verified: false,
+        description: 'Lyrics textarea by data-testid (VERIFIED)',
+        selector: 'textarea[data-testid="lyrics-textarea"]',
+        score: 100,
+        basis: 'data-attr',
+        verified: true,
     },
     {
-        description: 'div with lyrics content (display, not input)',
-        selector: '[data-testid="lyrics"], [data-testid="song-lyrics"]',
-        score: 50,
+        description: 'Lyrics display or input by placeholder',
+        selector: 'textarea[placeholder*="lyrics" i]',
+        score: 70,
+        basis: 'placeholder',
+        verified: true,
+    },
+];
+
+/**
+ * Selector candidates for the prompt-like input (Song Description in "simple" mode).
+ * ✅ VERIFIED — the "Song Description" section acts as the main prompt.
+ * @type {Array<Object>}
+ */
+const PROMPT_INPUT_CANDIDATES = [
+    {
+        description: 'Song Description textarea in simple create mode',
+        selector: '.efvek1x1 textarea',
+        score: 55,
+        basis: 'class',
+        verified: true,
+    },
+    {
+        description: 'Lyrics textarea by data-testid (use as fallback prompt input)',
+        selector: 'textarea[data-testid="lyrics-textarea"]',
+        score: 90,
         basis: 'data-attr',
-        verified: false,
+        verified: true,
+    },
+    {
+        description: 'Styles textarea by maxlength=1000',
+        selector: 'textarea[maxlength="1000"]',
+        score: 60,
+        basis: 'attr',
+        verified: true,
+    },
+];
+
+/**
+ * Selector candidates for the "Enhance lyrics" input.
+ * ✅ VERIFIED against live DOM 2026-03-17
+ * @type {Array<Object>}
+ */
+const ENHANCE_INPUT_CANDIDATES = [
+    {
+        description: 'Enhance lyrics input by placeholder (VERIFIED)',
+        selector: 'input[placeholder*="Enhance lyrics" i]',
+        score: 90,
+        basis: 'placeholder',
+        verified: true,
+    },
+];
+
+/**
+ * Selector candidates for the "Exclude styles" input.
+ * ✅ VERIFIED against live DOM 2026-03-17
+ * @type {Array<Object>}
+ */
+const EXCLUDE_STYLES_CANDIDATES = [
+    {
+        description: 'Exclude styles input by placeholder (VERIFIED)',
+        selector: 'input[placeholder="Exclude styles"]',
+        score: 90,
+        basis: 'placeholder',
+        verified: true,
     },
 ];
 

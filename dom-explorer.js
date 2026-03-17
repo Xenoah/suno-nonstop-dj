@@ -2,8 +2,15 @@
  * @file dom-explorer.js
  * @description Live DOM exploration and context extraction for Suno Nonstop DJ.
  *
- * Phase 1: Provides debugDump() and stub extraction.
- * Phase 2+: Full context extraction with scored candidates.
+ * UPDATED: 2026-03-17 — Uses verified selectors from real Suno DOM.
+ *
+ * Suno create page structure (verified):
+ * - Song Title:  input[placeholder="Song Title (Optional)"]
+ * - Lyrics:      textarea[data-testid="lyrics-textarea"]
+ * - Styles:      textarea[maxlength="1000"]
+ * - Style tags:  button[aria-label^="Add style:"]
+ * - Song Desc:   .efvek1x1 textarea
+ * - Create btn:  button with text "Create"
  *
  * PRINCIPLE: All DOM-reading logic is here. content.js calls these functions
  * but never queries DOM selectors directly (except #active-audio-play by ID).
@@ -36,43 +43,79 @@ function extractTrackContext() {
         _candidates: {},  // raw candidate data for debugging
     };
 
-    // --- Title ---
-    const titleResult = findBestCandidate(TITLE_CANDIDATES);
-    if (titleResult) {
-        context.title = titleResult.element.textContent.trim();
-        context._candidates.title = titleResult.allResults;
-    }
-
-    // --- Tags / Genre / Mood / Style ---
-    // Phase 2: Will parse tag-like elements near the current track
-    // For now, attempt to find any visible tag-like info
+    // --- Song Title (from create form input) ---
     try {
-        const tagEls = document.querySelectorAll(
-            '[data-testid*="tag"], [data-testid*="genre"], [class*="tag" i], [class*="chip" i]'
-        );
-        context.tags = Array.from(tagEls)
-            .map(el => el.textContent.trim())
-            .filter(t => t.length > 0 && t.length < 50);
-        context._candidates.tags = { count: tagEls.length, verified: false };
+        const titleResult = findBestCandidate(TITLE_INPUT_CANDIDATES);
+        if (titleResult) {
+            const val = titleResult.element.value || titleResult.element.textContent;
+            context.title = (val || '').trim() || null;
+            context._candidates.titleInput = titleResult.allResults;
+        }
     } catch (_) { /* swallow */ }
 
-    // --- Prompt (display, not input) ---
-    // Look for visible prompt text in the player area
+    // --- Also look for "now playing" title from player bar ---
+    if (!context.title) {
+        try {
+            const titleResult = findBestCandidate(TITLE_CANDIDATES);
+            if (titleResult) {
+                context.title = titleResult.element.textContent.trim();
+                context._candidates.title = titleResult.allResults;
+            }
+        } catch (_) { /* swallow */ }
+    }
+
+    // --- Lyrics (from lyrics textarea) ---
+    try {
+        const lyricsResult = findBestCandidate(LYRICS_INPUT_CANDIDATES);
+        if (lyricsResult) {
+            const val = lyricsResult.element.value || lyricsResult.element.textContent;
+            context.lyrics = (val || '').trim() || null;
+            context._candidates.lyrics = lyricsResult.allResults;
+        }
+    } catch (_) { /* swallow */ }
+
+    // --- Styles (from styles textarea) ---
+    try {
+        const stylesResult = findBestCandidate(STYLES_INPUT_CANDIDATES);
+        if (stylesResult) {
+            const val = stylesResult.element.value || stylesResult.element.textContent;
+            context.style = (val || '').trim() || null;
+            context._candidates.styles = stylesResult.allResults;
+        }
+    } catch (_) { /* swallow */ }
+
+    // --- Style tags (from aria-label="Add style: ..." buttons) ---
+    try {
+        const tagResult = findBestCandidate(STYLE_TAG_CANDIDATES);
+        if (tagResult) {
+            const tagButtons = document.querySelectorAll('button[aria-label^="Add style:"]');
+            context.tags = Array.from(tagButtons)
+                .map(btn => {
+                    const label = btn.getAttribute('aria-label') || '';
+                    return label.replace(/^Add style:\s*/i, '').trim();
+                })
+                .filter(t => t.length > 0);
+            context._candidates.tags = { count: tagButtons.length, verified: true };
+        }
+    } catch (_) { /* swallow */ }
+
+    // --- Song Description ---
+    try {
+        const descResult = findBestCandidate(DESCRIPTION_INPUT_CANDIDATES);
+        if (descResult) {
+            const val = descResult.element.value || descResult.element.textContent;
+            context.description = (val || '').trim() || null;
+            context._candidates.description = descResult.allResults;
+        }
+    } catch (_) { /* swallow */ }
+
+    // --- Prompt (Song Description textarea as main prompt) ---
     try {
         const promptResult = findBestCandidate(PROMPT_INPUT_CANDIDATES);
         if (promptResult) {
             const val = promptResult.element.value || promptResult.element.textContent;
             context.prompt = (val || '').trim() || null;
             context._candidates.prompt = promptResult.allResults;
-        }
-    } catch (_) { /* swallow */ }
-
-    // --- Lyrics ---
-    try {
-        const lyricsResult = findBestCandidate(LYRICS_CANDIDATES);
-        if (lyricsResult) {
-            context.lyrics = lyricsResult.element.textContent.trim() || null;
-            context._candidates.lyrics = lyricsResult.allResults;
         }
     } catch (_) { /* swallow */ }
 
@@ -91,12 +134,18 @@ function extractTrackContext() {
     // Confidence assessment
     const hasTitle = !!context.title;
     const hasTags = context.tags.length > 0;
+    const hasLyrics = !!context.lyrics;
+    const hasStyle = !!context.style;
     const hasPrompt = !!context.prompt;
-    if (hasTitle && (hasTags || hasPrompt)) {
-        context.confidence = 'medium';
-    }
-    if (hasTitle && hasTags && hasPrompt) {
+    const hasDescription = !!context.description;
+
+    const infoCount = [hasTitle, hasTags, hasLyrics, hasStyle, hasPrompt, hasDescription]
+        .filter(Boolean).length;
+
+    if (infoCount >= 3) {
         context.confidence = 'high';
+    } else if (infoCount >= 1) {
+        context.confidence = 'medium';
     }
 
     return context;
@@ -115,13 +164,6 @@ function checkSafetyConditions() {
 
     try {
         const bodyText = document.body ? document.body.innerText : '';
-
-        // Check for login issues
-        if (/sign\s*in|log\s*in|create\s+an?\s+account/i.test(bodyText) &&
-            !/sign\s*out|log\s*out|profile/i.test(bodyText)) {
-            // Only flag if sign-in text present WITHOUT sign-out (indicating logged-out state)
-            // This is heuristic — may need tuning
-        }
 
         // Check for credit-related messages
         if (/insufficient\s+credits|no\s+credits|out\s+of\s+credits|credits?\s*:\s*0\b/i.test(bodyText)) {
@@ -168,7 +210,11 @@ function debugDump() {
         selectorCandidates: {},
         createButton: null,
         promptInput: null,
+        lyricsInput: null,
+        stylesInput: null,
+        titleInput: null,
         playButtons: null,
+        styleTags: [],
     };
 
     // Audio elements
@@ -198,50 +244,58 @@ function debugDump() {
         dump.safetyCheck = { error: err.message };
     }
 
+    // Title input
+    try {
+        const r = findBestCandidate(TITLE_INPUT_CANDIDATES);
+        dump.titleInput = r ? { found: true, value: r.element.value, allResults: r.allResults } : { found: false };
+    } catch (err) {
+        dump.titleInput = { error: err.message };
+    }
+
+    // Lyrics input (VERIFIED selector)
+    try {
+        const r = findBestCandidate(LYRICS_INPUT_CANDIDATES);
+        dump.lyricsInput = r ? { found: true, value: r.element.value, tagName: r.element.tagName, allResults: r.allResults } : { found: false };
+    } catch (err) {
+        dump.lyricsInput = { error: err.message };
+    }
+
+    // Styles input (VERIFIED selector)
+    try {
+        const r = findBestCandidate(STYLES_INPUT_CANDIDATES);
+        dump.stylesInput = r ? { found: true, value: r.element.value, allResults: r.allResults } : { found: false };
+    } catch (err) {
+        dump.stylesInput = { error: err.message };
+    }
+
+    // Style tags (VERIFIED selector)
+    try {
+        const buttons = document.querySelectorAll('button[aria-label^="Add style:"]');
+        dump.styleTags = Array.from(buttons).map(b => b.getAttribute('aria-label').replace(/^Add style:\s*/i, ''));
+    } catch (err) {
+        dump.styleTags = { error: err.message };
+    }
+
     // Create button
     try {
-        dump.createButton = findBestCandidate(CREATE_BUTTON_CANDIDATES);
-        if (dump.createButton) {
-            dump.createButton = {
-                found: true,
-                text: dump.createButton.element.textContent.trim(),
-                allResults: dump.createButton.allResults,
-            };
-        } else {
-            dump.createButton = { found: false };
-        }
+        const r = findBestCandidate(CREATE_BUTTON_CANDIDATES);
+        dump.createButton = r ? { found: true, text: r.element.textContent.trim(), allResults: r.allResults } : { found: false };
     } catch (err) {
         dump.createButton = { error: err.message };
     }
 
-    // Prompt input
+    // Prompt input (Song Description)
     try {
-        dump.promptInput = findBestCandidate(PROMPT_INPUT_CANDIDATES);
-        if (dump.promptInput) {
-            dump.promptInput = {
-                found: true,
-                tagName: dump.promptInput.element.tagName,
-                allResults: dump.promptInput.allResults,
-            };
-        } else {
-            dump.promptInput = { found: false };
-        }
+        const r = findBestCandidate(PROMPT_INPUT_CANDIDATES);
+        dump.promptInput = r ? { found: true, tagName: r.element.tagName, value: r.element.value || '(no value)', allResults: r.allResults } : { found: false };
     } catch (err) {
         dump.promptInput = { error: err.message };
     }
 
     // Play buttons
     try {
-        dump.playButtons = findBestCandidate(PLAY_BUTTON_CANDIDATES);
-        if (dump.playButtons) {
-            dump.playButtons = {
-                found: true,
-                count: dump.playButtons.allResults.reduce((s, r) => s + r.count, 0),
-                allResults: dump.playButtons.allResults,
-            };
-        } else {
-            dump.playButtons = { found: false };
-        }
+        const r = findBestCandidate(PLAY_BUTTON_CANDIDATES);
+        dump.playButtons = r ? { found: true, count: r.allResults.reduce((s, x) => s + x.count, 0), allResults: r.allResults } : { found: false };
     } catch (err) {
         dump.playButtons = { error: err.message };
     }
