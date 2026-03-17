@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Suno Nonstop DJ",
+  "version": "0.1.0",
+  "description": "Nonstop generation assistant for Suno — monitors playback and prepares next tracks automatically.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "background": {
+    "service_worker": "service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://suno.com/*",
+        "https://www.suno.com/*"
+      ],
+      "js": [
+        "constants.js",
+        "state-machine.js",
+        "selectors.js",
+        "dom-explorer.js",
+        "prompt-builder.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Suno Nonstop DJ"
+  },
+  "icons": {}
+}

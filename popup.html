@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Suno Nonstop DJ</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- ================================================================
+       HEADER
+       ================================================================ -->
+  <header class="header">
+    <div class="header-title">
+      <span class="header-icon">🎵</span>
+      <h1>Suno Nonstop DJ</h1>
+    </div>
+    <span class="version" id="version">v0.1.0</span>
+  </header>
+
+  <!-- ================================================================
+       STATUS PANEL
+       ================================================================ -->
+  <section class="panel" id="status-panel">
+    <div class="panel-header">
+      <span class="panel-icon">📊</span>
+      <span class="panel-title">Status</span>
+      <span class="state-badge" id="state-badge">IDLE</span>
+    </div>
+
+    <div class="status-grid">
+      <div class="status-item">
+        <span class="status-label">Current Track</span>
+        <span class="status-value" id="current-track">—</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Remaining</span>
+        <span class="status-value" id="remaining-time">—</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Next Generation</span>
+        <span class="status-value" id="next-gen-status">—</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Errors</span>
+        <span class="status-value" id="error-count">0</span>
+      </div>
+    </div>
+
+    <!-- Progress bar for remaining time -->
+    <div class="progress-container" id="progress-container" style="display:none;">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+  </section>
+
+  <!-- ================================================================
+       CONTROLS
+       ================================================================ -->
+  <section class="panel" id="controls-panel">
+    <div class="panel-header">
+      <span class="panel-icon">🎛️</span>
+      <span class="panel-title">Controls</span>
+    </div>
+
+    <div class="controls-row">
+      <button class="btn btn-start" id="btn-start">▶ Start</button>
+      <button class="btn btn-stop" id="btn-stop" disabled>⏹ Stop</button>
+    </div>
+
+    <!-- Threshold -->
+    <div class="setting-row">
+      <label class="setting-label" for="threshold">Threshold (seconds)</label>
+      <input class="setting-input" type="number" id="threshold" min="10" max="600" value="120">
+    </div>
+
+    <!-- Mode -->
+    <div class="setting-row">
+      <label class="setting-label" for="mode-select">Mode</label>
+      <select class="setting-select" id="mode-select">
+        <option value="dry-run">🔍 Dry Run</option>
+        <option value="manual-create">🖐️ Manual Create</option>
+        <option value="auto-create">🤖 Auto Create</option>
+      </select>
+    </div>
+
+    <!-- Strategy -->
+    <div class="setting-row">
+      <label class="setting-label" for="strategy-select">Prompt Strategy</label>
+      <select class="setting-select" id="strategy-select">
+        <option value="conservative">🎯 Conservative</option>
+        <option value="balanced" selected>⚖️ Balanced</option>
+        <option value="adventurous">🚀 Adventurous</option>
+      </select>
+    </div>
+  </section>
+
+  <!-- ================================================================
+       PENDING PROMPT PREVIEW
+       ================================================================ -->
+  <section class="panel" id="prompt-panel" style="display:none;">
+    <div class="panel-header">
+      <span class="panel-icon">📝</span>
+      <span class="panel-title">Next Prompt</span>
+    </div>
+    <div class="prompt-preview" id="prompt-preview">—</div>
+  </section>
+
+  <!-- ================================================================
+       LOG VIEWER
+       ================================================================ -->
+  <section class="panel" id="log-panel">
+    <div class="panel-header">
+      <span class="panel-icon">📋</span>
+      <span class="panel-title">Log</span>
+      <button class="btn btn-small" id="btn-clear-log">Clear</button>
+    </div>
+    <div class="log-container" id="log-container">
+      <div class="log-empty">No log entries yet. Start automation to begin.</div>
+    </div>
+  </section>
+
+  <!-- ================================================================
+       DEBUG
+       ================================================================ -->
+  <section class="panel collapsible" id="debug-panel">
+    <div class="panel-header clickable" id="debug-toggle">
+      <span class="panel-icon">🐛</span>
+      <span class="panel-title">Debug</span>
+      <span class="collapse-icon">▸</span>
+    </div>
+    <div class="panel-body collapsed" id="debug-body">
+      <button class="btn btn-small" id="btn-debug-dump">Run Debug Dump</button>
+      <pre class="debug-output" id="debug-output"></pre>
+    </div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>
