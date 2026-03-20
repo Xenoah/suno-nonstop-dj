@@ -215,6 +215,8 @@ function debugDump() {
         titleInput: null,
         playButtons: null,
         styleTags: [],
+        trackQueue: null,
+        pendingSwitchTarget: null,
     };
 
     // Audio elements
@@ -298,6 +300,21 @@ function debugDump() {
         dump.playButtons = r ? { found: true, count: r.allResults.reduce((s, x) => s + x.count, 0), allResults: r.allResults } : { found: false };
     } catch (err) {
         dump.playButtons = { error: err.message };
+    }
+
+    // Track queue snapshot from content.js helpers
+    try {
+        if (window.__sunoDJ && typeof window.__sunoDJ.collectTrackCandidates === 'function') {
+            const tracks = window.__sunoDJ.collectTrackCandidates();
+            dump.trackQueue = tracks.map(track => ({
+                index: track.index,
+                text: track.text,
+                signature: track.signature,
+            }));
+            dump.pendingSwitchTarget = window.__sunoDJ.pendingSwitchTarget || null;
+        }
+    } catch (err) {
+        dump.trackQueue = { error: err.message };
     }
 
     return dump;

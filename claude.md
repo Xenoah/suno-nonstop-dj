@@ -282,6 +282,10 @@ Specifically:
 - wait for the next track to appear
 - detect if Suno auto-started the new track
 - avoid unnecessary manual switching when autoplay already happened
+- snapshot visible track cards before generation
+- diff the visible queue after generation to prefer the newly appeared card
+- avoid clicking the first generic Play button when switching
+- when the new card cannot be identified directly, fall back to an adjacent card relative to the current one, biased toward older -> latest progression
 
 This is the most important implementation shift since the initial MVP.
 

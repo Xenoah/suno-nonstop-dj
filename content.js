@@ -61,6 +61,12 @@
     /** @type {number|null} polling timer for generation completion */
     let generationPollTimer = null;
 
+    /** @type {Array<{signature: string, text: string, index: number}>} snapshot before generation */
+    let generationTrackSnapshot = [];
+
+    /** @type {{signature: string, text: string, index: number}|null} preferred next track to switch to */
+    let pendingSwitchTarget = null;
+
     /* ======================================================================
      * LOGGING
      * ==================================================================== */
@@ -223,6 +229,247 @@
     }
 
     /**
+     * Normalise text for fuzzy DOM comparisons.
+     * @param {string} text
+     * @returns {string}
+     */
+    function normalizeComparisonText(text) {
+        return String(text || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    /**
+     * Check whether a node is visible enough to be interacted with.
+     * @param {Element|null} el
+     * @returns {boolean}
+     */
+    function isInteractableElement(el) {
+        if (!el || !(el instanceof Element)) return false;
+        const htmlEl = /** @type {HTMLElement} */ (el);
+        if (htmlEl.hidden) return false;
+        if (htmlEl.getAttribute('aria-hidden') === 'true') return false;
+        if ('disabled' in htmlEl && htmlEl.disabled) return false;
+
+        const rect = htmlEl.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
+    /**
+     * Build a stable-enough signature for a track card / play button pair.
+     * @param {Element|null} card
+     * @param {Element} playButton
+     * @param {string} cardText
+     * @returns {string}
+     */
+    function buildTrackSignature(card, playButton, cardText) {
+        const parts = [];
+        const normalizedText = normalizeComparisonText(cardText).slice(0, 160);
+        const playAria = playButton.getAttribute('aria-label') || '';
+        const playTestId = playButton.getAttribute('data-testid') || '';
+        const href = playButton.getAttribute('href') || playButton.closest('a[href]')?.getAttribute('href') || '';
+
+        if (card) {
+            const cardTestId = card.getAttribute('data-testid') || '';
+            const cardRole = card.getAttribute('role') || '';
+            if (cardTestId) parts.push(`card:${cardTestId}`);
+            if (cardRole) parts.push(`role:${cardRole}`);
+        }
+
+        if (playTestId) parts.push(`btn:${playTestId}`);
+        if (playAria) parts.push(`aria:${playAria}`);
+        if (href) parts.push(`href:${href}`);
+        if (normalizedText) parts.push(`text:${normalizedText}`);
+
+        return parts.join('|');
+    }
+
+    /**
+     * Collect play-ready track candidates in DOM order.
+     * Prefers play buttons scoped inside track cards, then falls back globally.
+     * @returns {Array<{signature: string, text: string, normalizedText: string, index: number, card: Element|null, playButton: Element}>}
+     */
+    function collectTrackCandidates() {
+        const tracks = [];
+        const cardResult = findBestCandidate(CARD_CANDIDATES);
+
+        if (cardResult) {
+            const cards = Array.from(document.querySelectorAll(cardResult.candidate.selector));
+            cards.forEach((card, index) => {
+                const playResult = findBestCandidate(PLAY_BUTTON_CANDIDATES, card);
+                if (!playResult || !isInteractableElement(playResult.element)) return;
+
+                const cardText = (card.textContent || '').trim();
+                if (!cardText) return;
+
+                tracks.push({
+                    signature: buildTrackSignature(card, playResult.element, cardText),
+                    text: cardText.substring(0, 200),
+                    normalizedText: normalizeComparisonText(cardText),
+                    index,
+                    card,
+                    playButton: playResult.element,
+                });
+            });
+        }
+
+        if (tracks.length > 0) {
+            return tracks;
+        }
+
+        const seen = new Set();
+        const fallbackTracks = [];
+
+        for (const cand of PLAY_BUTTON_CANDIDATES) {
+            let elements = [];
+            try {
+                elements = Array.from(document.querySelectorAll(cand.selector));
+            } catch (_) {
+                continue;
+            }
+
+            for (const element of elements) {
+                if (seen.has(element) || !isInteractableElement(element)) continue;
+                seen.add(element);
+
+                const nearestCard = element.closest('[role="listitem"], [role="row"], [data-testid*="card"], [data-testid*="track"], [data-testid*="song"]');
+                const contextText = (nearestCard?.textContent || element.textContent || '').trim();
+                fallbackTracks.push({
+                    signature: buildTrackSignature(nearestCard, element, contextText),
+                    text: contextText.substring(0, 200),
+                    normalizedText: normalizeComparisonText(contextText),
+                    index: fallbackTracks.length,
+                    card: nearestCard,
+                    playButton: element,
+                });
+            }
+        }
+
+        return fallbackTracks;
+    }
+
+    /**
+     * Capture the visible track queue before generation starts.
+     * @param {string} reason
+     */
+    function snapshotTrackQueue(reason) {
+        const tracks = collectTrackCandidates();
+        generationTrackSnapshot = tracks.map(track => ({
+            signature: track.signature,
+            text: track.text,
+            index: track.index,
+        }));
+        pendingSwitchTarget = null;
+        log('debug', `Captured track queue snapshot (${reason})`, {
+            count: tracks.length,
+            sample: tracks.slice(0, 5).map(track => ({
+                index: track.index,
+                text: track.text,
+            })),
+        });
+    }
+
+    /**
+     * Find a newly appeared track by diffing against the pre-generation snapshot.
+     * @param {Array<{signature: string, text: string, normalizedText: string, index: number, card: Element|null, playButton: Element}>} tracks
+     * @returns {{signature: string, text: string, normalizedText: string, index: number, card: Element|null, playButton: Element}|null}
+     */
+    function findNewlyGeneratedTrack(tracks) {
+        if (!generationTrackSnapshot.length) return null;
+
+        const before = new Set(generationTrackSnapshot.map(track => track.signature));
+        const addedTracks = tracks.filter(track => !before.has(track.signature));
+
+        if (addedTracks.length === 0) {
+            return null;
+        }
+
+        const target = addedTracks[0];
+        pendingSwitchTarget = {
+            signature: target.signature,
+            text: target.text,
+            index: target.index,
+        };
+
+        return target;
+    }
+
+    /**
+     * Try to locate the currently playing track in the visible card list.
+     * @param {Array<{signature: string, text: string, normalizedText: string, index: number, card: Element|null, playButton: Element}>} tracks
+     * @returns {number}
+     */
+    function findCurrentTrackIndex(tracks) {
+        const currentTitle = normalizeComparisonText(lastContext?.title || '');
+
+        for (let i = 0; i < tracks.length; i++) {
+            const track = tracks[i];
+            const card = track.card;
+            if (!card) continue;
+
+            if (card.matches('[aria-current="true"]') || card.querySelector('[aria-current="true"]')) {
+                return i;
+            }
+
+            if (card.querySelector('button[aria-label*="Pause" i], button[aria-label*="pause" i]')) {
+                return i;
+            }
+
+            if (currentTitle && track.normalizedText.includes(currentTitle)) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /**
+     * Resolve the best switch target.
+     * Preference:
+     *   1. newly generated track
+     *   2. previously captured pending target
+     *   3. card immediately above the current one (older -> newer progression)
+     * @returns {{signature: string, text: string, normalizedText: string, index: number, card: Element|null, playButton: Element}|null}
+     */
+    function resolveNextTrackToPlay() {
+        const tracks = collectTrackCandidates();
+        if (tracks.length === 0) return null;
+
+        const newlyGenerated = findNewlyGeneratedTrack(tracks);
+        if (newlyGenerated) {
+            log('info', 'Queued newly generated track for next switch', {
+                index: newlyGenerated.index,
+                text: newlyGenerated.text,
+            });
+            return newlyGenerated;
+        }
+
+        if (pendingSwitchTarget) {
+            const pending = tracks.find(track => track.signature === pendingSwitchTarget.signature);
+            if (pending) {
+                return pending;
+            }
+        }
+
+        const currentIndex = findCurrentTrackIndex(tracks);
+        if (currentIndex >= 0) {
+            const preferred = tracks[currentIndex - 1] || tracks[currentIndex + 1] || null;
+            if (preferred) {
+                log('warn', 'Falling back to adjacent track selection', {
+                    currentIndex,
+                    targetIndex: preferred.index,
+                    targetText: preferred.text,
+                    assumption: 'DOM order is treated as old -> latest when moving upward',
+                });
+            }
+            return preferred;
+        }
+
+        return tracks[0] || null;
+    }
+
+    /**
      * Start polling for the audio element.
      */
     function startAudioPolling() {
@@ -343,6 +590,8 @@
                 stopGenerationPolling();
                 pendingPrompt = null;
                 lastContext = null;
+                pendingSwitchTarget = null;
+                generationTrackSnapshot = [];
                 fsm.transition(STATE.PLAYING_CURRENT, 'new song auto-played (nonstop loop)');
             } else {
                 log('debug', 'Audio play during wait, but same src — ignoring');
@@ -352,6 +601,8 @@
         // If we're in SWITCHING_PLAYBACK, the new track has started
         if (fsm.current === STATE.SWITCHING_PLAYBACK) {
             stopGenerationPolling();
+            pendingSwitchTarget = null;
+            generationTrackSnapshot = [];
             fsm.transition(STATE.PLAYING_CURRENT, 'new track started after switch');
         }
 
@@ -546,6 +797,7 @@
                 attemptFillPrompt(result.prompt, result.styles, result.title);
                 // Snapshot src so we can detect when user clicks Create and new song starts
                 generationSrcSnapshot = audioElement ? audioElement.src : null;
+                snapshotTrackQueue('manual-create armed');
                 // In manual-create, we go to ARMED_FOR_SWITCH, user clicks Create
                 fsm.transition(STATE.ARMED_FOR_SWITCH, 'manual-create: prompt filled, waiting user');
             } else if (settings.mode === MODE.AUTO_CREATE) {
@@ -584,6 +836,7 @@
 
             // Snapshot the current audio src BEFORE clicking Create
             generationSrcSnapshot = audioElement ? audioElement.src : null;
+            snapshotTrackQueue('before auto-create click');
             log('info', `📸 Src snapshot: ${generationSrcSnapshot}`);
 
             log('info', `🖱️ Clicking Create button: "${createResult.element.textContent.trim()}"`);
@@ -632,6 +885,8 @@
                     stopGenerationPolling();
                     pendingPrompt = null;
                     lastContext = null;
+                    pendingSwitchTarget = null;
+                    generationTrackSnapshot = [];
                     // If audio is already playing, go to PLAYING_CURRENT
                     if (!audioElement.paused) {
                         fsm.transition(STATE.PLAYING_CURRENT, 'new song auto-playing (poll detected)');
@@ -646,6 +901,18 @@
             // Method 2: Check if loading indicator disappeared
             // (Suno shows a spinner or progress during generation)
             try {
+                const tracks = collectTrackCandidates();
+                const newlyGenerated = findNewlyGeneratedTrack(tracks);
+                if (newlyGenerated) {
+                    log('info', '🎵 Newly generated track card detected', {
+                        index: newlyGenerated.index,
+                        text: newlyGenerated.text,
+                    });
+                    stopGenerationPolling();
+                    fsm.transition(STATE.ARMED_FOR_SWITCH, 'newly generated track detected in list');
+                    return;
+                }
+
                 const loadingIndicators = document.querySelectorAll(
                     '[class*="animate-spin"], [class*="loading"], [class*="generating"], [class*="progress"]'
                 );
@@ -710,12 +977,15 @@
             return;
         }
 
-        // Try to find and click the play button of the newest track
+        // Try to find and click the most appropriate next track
         try {
-            const playResult = findBestCandidate(PLAY_BUTTON_CANDIDATES);
-            if (playResult) {
-                log('info', `🖱️ Clicking play button`);
-                playResult.element.click();
+            const nextTrack = resolveNextTrackToPlay();
+            if (nextTrack && nextTrack.playButton) {
+                log('info', '🖱️ Clicking resolved next-track play button', {
+                    index: nextTrack.index,
+                    text: nextTrack.text,
+                });
+                nextTrack.playButton.click();
                 // Wait for audio src to change → onAudioPlay will transition
                 setTimeout(() => {
                     if (fsm.current === STATE.SWITCHING_PLAYBACK) {
@@ -730,8 +1000,11 @@
                     }
                 }, 3000);
             } else {
-                log('error', '❌ Play button not found for switch');
-                fsm.transition(STATE.ERROR, 'play button not found');
+                log('error', '❌ No suitable next track found for switch', {
+                    snapshotCount: generationTrackSnapshot.length,
+                    pendingSwitchTarget,
+                });
+                fsm.transition(STATE.ERROR, 'next track not found');
             }
         } catch (err) {
             log('error', 'Playback switch failed', err.message);
@@ -911,6 +1184,8 @@
         lastContext = null;
         playbackRetries = 0;
         generationSrcSnapshot = null;
+        generationTrackSnapshot = [];
+        pendingSwitchTarget = null;
         stopGenerationPolling();
 
         startMutationObserver();
@@ -1075,9 +1350,12 @@
             buildNextPromptPlan,
             startAutomation,
             stopAutomation,
+            collectTrackCandidates,
             get settings() { return settings; },
             get logBuffer() { return logBuffer; },
             get lastContext() { return lastContext; },
+            get generationTrackSnapshot() { return generationTrackSnapshot; },
+            get pendingSwitchTarget() { return pendingSwitchTarget; },
         };
 
         log('info', '💡 Debug: window.__sunoDJ is available in DevTools console');
