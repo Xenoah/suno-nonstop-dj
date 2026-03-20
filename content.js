@@ -55,6 +55,12 @@
     /** @type {number} retry counter for playback switch */
     let playbackRetries = 0;
 
+    /** @type {string|null} audio src snapshot taken before clicking Create */
+    let generationSrcSnapshot = null;
+
+    /** @type {number|null} polling timer for generation completion */
+    let generationPollTimer = null;
+
     /* ======================================================================
      * LOGGING
      * ==================================================================== */
@@ -127,6 +133,9 @@
                 break;
             case STATE.TRIGGERING_GENERATION:
                 handleTriggerGeneration();
+                break;
+            case STATE.WAITING_NEXT_READY:
+                handleWaitingNextReady();
                 break;
             case STATE.ARMED_FOR_SWITCH:
                 handleArmedForSwitch();
@@ -310,10 +319,11 @@
 
     /** @param {Event} _e */
     function onAudioPlay(_e) {
-        log('info', '▶️ Audio play event', { src: audioElement?.src });
+        const newSrc = audioElement?.src || '';
+        log('info', '▶️ Audio play event', { src: newSrc });
 
         // Reset trigger guard when a NEW track starts
-        if (audioElement && audioElement.src !== lastTriggeredSrc) {
+        if (audioElement && newSrc !== lastTriggeredSrc) {
             lastTriggeredSrc = null;
         }
 
@@ -322,9 +332,26 @@
             fsm.transition(STATE.PLAYING_CURRENT, 'audio play event');
         }
 
-        // If we're in ARMED_FOR_SWITCH state after a track switch, this means
-        // the new track has started playing
+        // *** NONSTOP LOOP: Suno auto-plays the newly created song ***
+        // If we're waiting for generation or armed, and a NEW src starts playing,
+        // that means the new song is ready — go straight to PLAYING_CURRENT.
+        if (fsm.current === STATE.WAITING_NEXT_READY ||
+            fsm.current === STATE.ARMED_FOR_SWITCH) {
+            const isNewTrack = generationSrcSnapshot && newSrc && newSrc !== generationSrcSnapshot;
+            if (isNewTrack) {
+                log('info', '🎉 New track auto-playing! Looping back to PLAYING_CURRENT');
+                stopGenerationPolling();
+                pendingPrompt = null;
+                lastContext = null;
+                fsm.transition(STATE.PLAYING_CURRENT, 'new song auto-played (nonstop loop)');
+            } else {
+                log('debug', 'Audio play during wait, but same src — ignoring');
+            }
+        }
+
+        // If we're in SWITCHING_PLAYBACK, the new track has started
         if (fsm.current === STATE.SWITCHING_PLAYBACK) {
+            stopGenerationPolling();
             fsm.transition(STATE.PLAYING_CURRENT, 'new track started after switch');
         }
 
@@ -517,6 +544,8 @@
             if (settings.mode === MODE.MANUAL_CREATE) {
                 log('info', '🖐️ [MANUAL-CREATE] Prompt ready. Attempting to fill input fields...');
                 attemptFillPrompt(result.prompt, result.styles, result.title);
+                // Snapshot src so we can detect when user clicks Create and new song starts
+                generationSrcSnapshot = audioElement ? audioElement.src : null;
                 // In manual-create, we go to ARMED_FOR_SWITCH, user clicks Create
                 fsm.transition(STATE.ARMED_FOR_SWITCH, 'manual-create: prompt filled, waiting user');
             } else if (settings.mode === MODE.AUTO_CREATE) {
@@ -553,6 +582,10 @@
                 return;
             }
 
+            // Snapshot the current audio src BEFORE clicking Create
+            generationSrcSnapshot = audioElement ? audioElement.src : null;
+            log('info', `📸 Src snapshot: ${generationSrcSnapshot}`);
+
             log('info', `🖱️ Clicking Create button: "${createResult.element.textContent.trim()}"`);
             createResult.element.click();
             log('info', '✅ Create button clicked — waiting for generation');
@@ -564,13 +597,105 @@
         }
     }
 
+    /* ======================================================================
+     * GENERATION COMPLETION POLLING (WAITING_NEXT_READY)
+     * ==================================================================== */
+
+    /**
+     * Handle WAITING_NEXT_READY — poll for generation completion.
+     * Detection methods:
+     *   1. Audio src changes (Suno auto-plays the new song) — detected in onAudioPlay
+     *   2. New song cards appear in the list
+     *   3. Timeout fallback
+     */
+    function handleWaitingNextReady() {
+        log('info', '⏳ Waiting for generation to complete...');
+        stopGenerationPolling();
+
+        let pollCount = 0;
+        const maxPolls = 120; // 120 * 3s = 6 minutes max wait
+
+        generationPollTimer = setInterval(() => {
+            pollCount++;
+
+            if (fsm.current !== STATE.WAITING_NEXT_READY) {
+                // State changed (e.g. onAudioPlay detected auto-play)
+                stopGenerationPolling();
+                return;
+            }
+
+            // Method 1: Check if audio src changed (most reliable)
+            if (audioElement && generationSrcSnapshot) {
+                const currentSrc = audioElement.src;
+                if (currentSrc && currentSrc !== generationSrcSnapshot) {
+                    log('info', '🎉 Audio src changed — new song detected!');
+                    stopGenerationPolling();
+                    pendingPrompt = null;
+                    lastContext = null;
+                    // If audio is already playing, go to PLAYING_CURRENT
+                    if (!audioElement.paused) {
+                        fsm.transition(STATE.PLAYING_CURRENT, 'new song auto-playing (poll detected)');
+                    } else {
+                        // New src but not playing yet — arm for switch
+                        fsm.transition(STATE.ARMED_FOR_SWITCH, 'new song ready but not playing');
+                    }
+                    return;
+                }
+            }
+
+            // Method 2: Check if loading indicator disappeared
+            // (Suno shows a spinner or progress during generation)
+            try {
+                const loadingIndicators = document.querySelectorAll(
+                    '[class*="animate-spin"], [class*="loading"], [class*="generating"], [class*="progress"]'
+                );
+                // If we previously saw loading indicators and now they're gone,
+                // generation likely completed
+                if (pollCount > 3 && loadingIndicators.length === 0) {
+                    // Also check if any new song cards appeared
+                    // Look for cards with very recent timestamps or "just now" text
+                    const allButtons = document.querySelectorAll('button[aria-label="Play"], button[aria-label="play"]');
+                    if (allButtons.length > 0) {
+                        log('info', '🎵 Generation appears complete (no loading + play buttons found)');
+                    }
+                }
+            } catch (_) { /* swallow */ }
+
+            // Timeout
+            if (pollCount >= maxPolls) {
+                log('warn', '⏰ Generation polling timeout — giving up');
+                stopGenerationPolling();
+                fsm.transition(STATE.ERROR, 'generation timeout');
+                return;
+            }
+
+            // Periodic status log
+            if (pollCount % 10 === 0) {
+                log('info', `⏳ Still waiting for generation... (${pollCount * 3}s elapsed)`);
+            }
+
+            broadcastStatus();
+        }, 3000);
+    }
+
+    /**
+     * Stop generation polling timer.
+     */
+    function stopGenerationPolling() {
+        if (generationPollTimer !== null) {
+            clearInterval(generationPollTimer);
+            generationPollTimer = null;
+        }
+    }
+
     /**
      * Handle ARMED_FOR_SWITCH — next track is ready, waiting for current to end.
      */
     function handleArmedForSwitch() {
-        log('info', '🎯 Armed for switch — waiting for current track to end');
+        log('info', '🎯 Armed for switch — waiting for current track to end or new track to auto-play');
         playbackRetries = 0;
-        // The timeupdate handler will transition to SWITCHING_PLAYBACK
+        // onAudioPlay will detect if new track starts playing
+        // timeupdate handler will transition to SWITCHING_PLAYBACK if current track ends
     }
 
     /**
@@ -785,6 +910,8 @@
         pendingPrompt = null;
         lastContext = null;
         playbackRetries = 0;
+        generationSrcSnapshot = null;
+        stopGenerationPolling();
 
         startMutationObserver();
         fsm.transition(STATE.WAITING_AUDIO, 'user started automation');
@@ -813,6 +940,7 @@
     function cleanup() {
         stopAudioPolling();
         stopMutationObserver();
+        stopGenerationPolling();
 
         if (timeupdateDebounceTimer !== null) {
             clearTimeout(timeupdateDebounceTimer);

@@ -305,6 +305,36 @@ const EXCLUDE_STYLES_CANDIDATES = [
     },
 ];
 
+/**
+ * Selector candidates for detecting instrumental mode.
+ * On Suno's create page, the Lyrics section header ("Lyrics") has a
+ * collapse/expand toggle. When it says "leave blank for instrumental"
+ * and the textarea is hidden or the placeholder indicates instrumental,
+ * we consider it instrumental mode.
+ *
+ * Detection strategy:
+ *   - Check if lyrics textarea placeholder contains "instrumental"
+ *   - Check if a toggle/switch near "Lyrics" is in "off" state
+ *   - Check for aria-checked or data-state on a switch element
+ * @type {Array<Object>}
+ */
+const INSTRUMENTAL_TOGGLE_CANDIDATES = [
+    {
+        description: 'Switch/toggle near Lyrics section with data-state',
+        selector: '[data-testid="instrumental-toggle"], button[role="switch"]',
+        score: 70,
+        basis: 'role',
+        verified: false,
+    },
+    {
+        description: 'Chakra Switch input checkbox',
+        selector: 'input[type="checkbox"][role="switch"]',
+        score: 65,
+        basis: 'role',
+        verified: false,
+    },
+];
+
 /* ========================================================================
  * SCORING UTILITY
  * ======================================================================== */

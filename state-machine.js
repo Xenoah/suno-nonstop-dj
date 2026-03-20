@@ -58,12 +58,15 @@ const TRANSITIONS = Object.freeze({
     ]),
     [STATE.WAITING_NEXT_READY]: new Set([
         STATE.ARMED_FOR_SWITCH,
+        STATE.PLAYING_CURRENT,  // Suno auto-plays the new song
+        STATE.WAITING_AUDIO,    // recovery
         STATE.ERROR,
         STATE.IDLE,
         STATE.STOPPED,
     ]),
     [STATE.ARMED_FOR_SWITCH]: new Set([
         STATE.SWITCHING_PLAYBACK,
+        STATE.PLAYING_CURRENT,  // audio started playing (auto-play or user click)
         STATE.ERROR,
         STATE.IDLE,
         STATE.STOPPED,

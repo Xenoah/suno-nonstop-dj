@@ -1,165 +1,141 @@
-# Suno Nonstop DJ — Chrome Extension
+# Suno Nonstop DJ
 
-> 🎵 Suno.com 上で動作するノンストップ生成アシスタント
+Suno.com 上で再生中の曲を監視し、残り時間がしきい値を下回ったタイミングで次曲生成を支援する Chrome 拡張です。
 
-## 概要
+この拡張は Manifest V3 ベースで、ビルドは不要です。現在は `dry-run`、`manual-create`、`auto-create` の 3 モードを持ち、実際の Suno DOM を見ながら少しずつ安定化を進めている段階です。
 
-再生中の楽曲の残り時間を監視し、残り120秒以下になったら次曲の生成を開始するChrome拡張 (Manifest V3)。  
-前曲のDOM情報（タイトル・タグ・プロンプト・歌詞）から文脈を読み取り、自然につながる新しいプロンプトを自動構築します。
+## できること
 
-## インストール方法
+- 再生中の `audio` 要素を監視して残り時間を表示
+- しきい値到達時に前曲の文脈を DOM から抽出
+- 次曲用の prompt / styles / title を自動生成
+- `manual-create` では入力欄の自動入力まで実行
+- `auto-create` では Create のクリックまで実行
+- 新曲が自動再生された場合は、そのまま次のループへ戻る処理を持つ
+- Popup から状態、残り時間、ログ、Debug Dump を確認できる
 
-1. このリポジトリをクローンまたはダウンロード
-2. Chrome で `chrome://extensions` を開く
-3. 右上の「**デベロッパーモード**」をONにする
-4. 「**パッケージ化されていない拡張機能を読み込む**」をクリック
-5. このリポジトリのフォルダ（`manifest.json` があるディレクトリ）を選択
-6. 拡張がロードされ、ツールバーにアイコンが表示される
+## まだ不安定な点
+
+- Suno 側の DOM 変更に強く依存します
+- Create ボタン、Play ボタン、曲カード周辺のセレクタはまだ要検証です
+- 生成完了判定は `audio.src` の変化を主軸にしており、一部フォールバックは経験則ベースです
+- まずは `Dry Run` で挙動確認する前提です
+
+## インストール
+
+1. このリポジトリを取得します。
+2. Chrome で `chrome://extensions` を開きます。
+3. 右上の「デベロッパーモード」を ON にします。
+4. 「パッケージ化されていない拡張機能を読み込む」を選びます。
+5. `manifest.json` があるこのフォルダを指定します。
 
 ## 使い方
 
-### 基本操作
-1. Suno.com にアクセスしてログイン
-2. ライブラリページまたは楽曲再生ページを開く
-3. ツールバーの Suno Nonstop DJ アイコンをクリック（Popup が開く）
-4. 設定を確認:
-   - **Mode**: `Dry Run`（推奨初期設定）— ログのみ、DOM操作なし
-   - **Threshold**: `120` 秒（しきい値）
-   - **Strategy**: `Balanced`
-5. 「**▶ Start**」をクリック
-6. 曲を再生 → Popup にリアルタイム情報が表示される
-7. 停止するには「**⏹ Stop**」をクリック
+1. Suno にログインした状態で対象ページを開きます。
+2. 拡張の Popup を開きます。
+3. まずは以下の設定を使います。
+   - Mode: `Dry Run`
+   - Threshold: `120`
+   - Strategy: `Balanced`
+4. `Start` を押します。
+5. 曲を再生し、状態が `WAITING_AUDIO` から `PLAYING_CURRENT` に進むことを確認します。
+6. 残り時間がしきい値を下回ったら、ログと Debug Dump を見て抽出内容を確認します。
+7. 問題なければ `Manual Create`、その後に `Auto Create` へ進めます。
 
-### モードの説明
+## モード
 
-| モード | 動作 |
-|--------|------|
-| 🔍 **Dry Run** | ログのみ。DOM操作なし。安全に動作確認できる |
-| 🖐️ **Manual Create** | プロンプト入力欄への自動入力まで。Createボタンは手動 |
-| 🤖 **Auto Create** | 全自動。Createボタンも押す（⚠️ 要注意） |
-
-### プロンプト戦略
-
-| 戦略 | 説明 |
+| Mode | 内容 |
 |------|------|
-| 🎯 **Conservative** | 前曲にかなり近いプロンプト |
-| ⚖️ **Balanced** | 継承と変化を両立 |
-| 🚀 **Adventurous** | 大胆に発展させる |
+| `dry-run` | DOM 操作なし。監視、抽出、計画ログのみ |
+| `manual-create` | prompt / styles / title の入力まで自動 |
+| `auto-create` | Create クリックまで自動 |
+
+## 内部フロー
+
+```text
+IDLE
+  -> WAITING_AUDIO
+  -> PLAYING_CURRENT
+  -> THRESHOLD_REACHED
+  -> EXTRACTING_CONTEXT
+  -> COMPOSING_NEXT_PROMPT
+  -> TRIGGERING_GENERATION
+  -> WAITING_NEXT_READY
+  -> ARMED_FOR_SWITCH
+  -> SWITCHING_PLAYBACK
+  -> PLAYING_CURRENT
+```
+
+補足:
+
+- `dry-run` では `THRESHOLD_REACHED` で止まり、抽出結果と prompt plan をログ出力します。
+- Suno が新曲を自動再生した場合、`WAITING_NEXT_READY` あるいは `ARMED_FOR_SWITCH` から直接 `PLAYING_CURRENT` に戻る設計です。
 
 ## ファイル構成
 
-```
-suno-nonstop-dj/
-├── manifest.json          # Manifest V3 定義
-├── constants.js           # 共有定数・デフォルト設定
-├── state-machine.js       # 有限状態機械（12状態）
-├── selectors.js           # DOM セレクタ候補 + スコアリング
-├── dom-explorer.js        # live DOM 探索・debugDump()
-├── prompt-builder.js      # 次曲プロンプト生成（3戦略）
-├── content.js             # Content Script 本体
-├── service_worker.js      # Background Service Worker
-├── popup.html             # Popup UI
-├── popup.js               # Popup ロジック
-├── popup.css              # Popup スタイル
-├── devtools-snippets.js   # DevTools 用探索スクリプト
-└── README.md              # このファイル
-```
+- `manifest.json`: 拡張定義
+- `constants.js`: 状態名、モード、既定値
+- `state-machine.js`: 有限状態機械
+- `selectors.js`: DOM セレクタ候補とスコアリング
+- `dom-explorer.js`: DOM 抽出、安全チェック、`debugDump()`
+- `prompt-builder.js`: 次曲 prompt 生成
+- `content.js`: 本体ロジック
+- `service_worker.js`: メッセージ中継とログ保持
+- `popup.html`, `popup.js`, `popup.css`: Popup UI
+- `devtools-snippets.js`: DevTools 用の探索スニペット
 
----
+## デバッグ
 
-## 状態遷移図
+### Console
 
-```
-IDLE
- └→ WAITING_AUDIO (audio要素を探索中)
-     └→ PLAYING_CURRENT (再生中)
-         └→ THRESHOLD_REACHED (残り120秒以下)
-             └→ EXTRACTING_CONTEXT (DOM情報抽出)
-                 └→ COMPOSING_NEXT_PROMPT (プロンプト生成)
-                     ├→ TRIGGERING_GENERATION (auto-create)
-                     │   └→ WAITING_NEXT_READY (生成待ち)
-                     │       └→ ARMED_FOR_SWITCH (次曲準備完了)
-                     │           └→ SWITCHING_PLAYBACK (再生切替)
-                     │               └→ PLAYING_CURRENT (ループ)
-                     └→ ARMED_FOR_SWITCH (manual-create)
-                         └→ ...
-↳ ERROR (エラー時) → IDLE or STOPPED
-↳ STOPPED (停止) → IDLE
-```
+DevTools Console で `SunoDJ` を含むログを確認できます。
 
-## 安全停止条件
+### Debug Dump
 
-以下を検知すると自動停止します:
+Console で次を実行できます。
 
-- Credits 不足メッセージ
-- CAPTCHA / 人間確認画面
-- レート制限メッセージ
-- 連続エラー 5回
-- audio 要素の消失（3回まで再試行後停止）
-
----
-
-## デバッグ方法
-
-### 1. DevTools Console でのログ確認
-1. Suno ページで F12 を押す
-2. Console タブに `[SunoDJ]` プレフィックスのログが表示される
-3. フィルタに `SunoDJ` を入力すると見やすくなる
-
-### 2. debugDump() の実行
-Console で以下を実行:
 ```js
 window.__sunoDJ.debugDump()
 ```
 
-出力されるJSON:
-- `audioElements`: すべての audio 要素の状態
-- `trackContext`: 抽出されたトラック情報
-- `safetyCheck`: 安全性チェック結果
-- `selectorCandidates`: 各セレクタの候補一覧
+確認できる主な内容:
 
-### 3. Popup の Debug パネル
-Popup 下部の「🐛 Debug」をクリックして展開 → 「Run Debug Dump」ボタン
+- `audioElements`
+- `trackContext`
+- `safetyCheck`
+- `createButton`
+- `playButtons`
+- `lyricsInput`
+- `stylesInput`
+- `promptInput`
 
-### 4. Breakpoint 推奨箇所
-- `content.js`: `processTimeUpdate()` — 残り時間の計算ロジック
-- `content.js`: `onAudioPlay()` — 再生開始検知
-- `state-machine.js`: `transition()` — 状態遷移
-- `dom-explorer.js`: `extractTrackContext()` — DOM情報抽出
+### セレクタ調査
 
-### 5. DevTools 探索スクリプト
-`devtools-snippets.js` の各スニペットを Console に貼って実行:
-- SNIPPET 1: Audio要素の確認
-- SNIPPET 2: 曲タイトル候補
-- SNIPPET 3: 曲カード候補
-- SNIPPET 4: 再生ボタン候補
-- SNIPPET 5: Create/Generateボタン候補
-- SNIPPET 6: プロンプト入力欄/歌詞欄候補
-- SNIPPET 7: 生成状態インジケータ
+`devtools-snippets.js` を使うと、以下の候補探索を進めやすくなります。
 
-### 6. セレクタが壊れた場合
-**修正対象ファイル: `selectors.js` のみ**
+- audio 要素
+- 曲タイトル
+- 曲カード
+- Play ボタン
+- Create ボタン
+- prompt / lyrics 入力欄
+- 生成中インジケータ
 
-1. DevTools スニペットで新しいセレクタ候補を見つける
-2. `selectors.js` の該当する候補配列に追加/修正
-3. `verified: true` に変更してスコアを上げる
-4. 拡張を再読み込み（`chrome://extensions` → 🔄）
+## 安全停止
 
----
+以下を検知すると停止または停止寄りの挙動を取ります。
 
-## 既知の不確実要素
+- credits 不足メッセージ
+- CAPTCHA / 人間確認
+- rate limit 系メッセージ
+- 連続エラーの上限到達
 
-| 要素 | 状態 | 備考 |
-|------|------|------|
-| `#active-audio-play` | ✅ 確認済み | Phase 1 で使用 |
-| 曲タイトルのセレクタ | ⚠️ 仮実装 | DevTools で確認必要 |
-| 曲カードのセレクタ | ⚠️ 仮実装 | DevTools で確認必要 |
-| Createボタンのセレクタ | ⚠️ 仮実装 | DevTools で確認必要 |
-| プロンプト入力欄 | ⚠️ 仮実装 | DevTools で確認必要 |
-| 歌詞/説明文 | ⚠️ 仮実装 | DevTools で確認必要 |
-| 生成完了の検知 | ⚠️ 未実装 | DOM変化 or 新 audio src |
-| credits残量表示 | ⚠️ 仮実装 | テキスト検索のみ |
+## 注意
+
+この拡張は Suno の画面構造に依存しています。UI 変更が入ると動かなくなる可能性があります。
+
+安定化前提の実験ツールとして扱い、まずは `Dry Run` から確認してください。
 
 ## ライセンス
 
-Private — 個人利用のみ
+Private - 個人利用のみ
