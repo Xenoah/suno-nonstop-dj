@@ -371,6 +371,19 @@
     }
 
     /**
+     * Count track signatures, preserving multiplicity for duplicate generations.
+     * @param {Array<{signature: string}>} tracks
+     * @returns {Map<string, number>}
+     */
+    function countTrackSignatures(tracks) {
+        const counts = new Map();
+        for (const track of tracks) {
+            counts.set(track.signature, (counts.get(track.signature) || 0) + 1);
+        }
+        return counts;
+    }
+
+    /**
      * Find a newly appeared track by diffing against the pre-generation snapshot.
      * @param {Array<{signature: string, text: string, normalizedText: string, index: number, card: Element|null, playButton: Element}>} tracks
      * @returns {{signature: string, text: string, normalizedText: string, index: number, card: Element|null, playButton: Element}|null}
@@ -378,14 +391,30 @@
     function findNewlyGeneratedTrack(tracks) {
         if (!generationTrackSnapshot.length) return null;
 
-        const before = new Set(generationTrackSnapshot.map(track => track.signature));
-        const addedTracks = tracks.filter(track => !before.has(track.signature));
+        const beforeCounts = countTrackSignatures(generationTrackSnapshot);
+        const seenCounts = new Map();
+        const addedTracks = [];
+
+        for (const track of tracks) {
+            const beforeCount = beforeCounts.get(track.signature) || 0;
+            const seenCount = seenCounts.get(track.signature) || 0;
+
+            if (seenCount < beforeCount) {
+                seenCounts.set(track.signature, seenCount + 1);
+                continue;
+            }
+
+            seenCounts.set(track.signature, seenCount + 1);
+            addedTracks.push(track);
+        }
 
         if (addedTracks.length === 0) {
             return null;
         }
 
-        const target = addedTracks[0];
+        const target = addedTracks
+            .slice()
+            .sort((a, b) => a.index - b.index)[0];
         pendingSwitchTarget = {
             signature: target.signature,
             text: target.text,
@@ -429,7 +458,7 @@
      * Preference:
      *   1. newly generated track
      *   2. previously captured pending target
-     *   3. card immediately above the current one (older -> newer progression)
+     *   3. card immediately above the current one in a latest-first list
      * @returns {{signature: string, text: string, normalizedText: string, index: number, card: Element|null, playButton: Element}|null}
      */
     function resolveNextTrackToPlay() {
@@ -460,7 +489,7 @@
                     currentIndex,
                     targetIndex: preferred.index,
                     targetText: preferred.text,
-                    assumption: 'DOM order is treated as old -> latest when moving upward',
+                    assumption: 'DOM order is treated as latest-first (descending)',
                 });
             }
             return preferred;
@@ -1037,27 +1066,76 @@
      * ==================================================================== */
 
     /**
-     * Attempt to fill the prompt/lyrics/styles fields on the create page.
-     * Uses VERIFIED selectors from live DOM inspection.
-     * @param {string} promptText - the main prompt/lyrics text
+     * Find a safe target for prompt text.
+     * Never returns the lyrics or styles field because prompt instructions
+     * must not leak into those inputs.
+     * @returns {Element|null}
+     */
+    function findPromptTargetInput() {
+        const promptResult = findBestCandidate(PROMPT_INPUT_CANDIDATES);
+        const descResult = findBestCandidate(DESCRIPTION_INPUT_CANDIDATES);
+        const lyricsResult = findBestCandidate(LYRICS_INPUT_CANDIDATES);
+        const stylesResult = findBestCandidate(STYLES_INPUT_CANDIDATES);
+
+        const blocked = new Set([
+            lyricsResult?.element || null,
+            stylesResult?.element || null,
+        ]);
+
+        if (promptResult && !blocked.has(promptResult.element)) {
+            return promptResult.element;
+        }
+
+        if (descResult && !blocked.has(descResult.element)) {
+            return descResult.element;
+        }
+
+        return null;
+    }
+
+    /**
+     * Trim a title to fit the target input.
+     * Uses the element maxlength when available, otherwise falls back to 80.
+     * @param {string} titleText
+     * @param {HTMLElement} el
+     * @returns {string}
+     */
+    function sanitizeTitleForInput(titleText, el) {
+        const raw = String(titleText || '').replace(/\s+/g, ' ').trim();
+        if (!raw) return '';
+
+        const elementMax = 'maxLength' in el ? Number(el.maxLength) : -1;
+        const limit = Number.isFinite(elementMax) && elementMax > 0 ? elementMax : 80;
+        if (raw.length <= limit) {
+            return raw;
+        }
+
+        const shortened = raw.slice(0, Math.max(0, limit)).trim();
+        return shortened;
+    }
+
+    /**
+     * Attempt to fill the prompt/styles/title fields on the create page.
+     * Prompt text is intentionally kept out of the lyrics field.
+     * @param {string} promptText - the main prompt text
      * @param {string} [stylesText] - optional styles text
      * @param {string} [titleText] - optional song title
      */
     function attemptFillPrompt(promptText, stylesText, titleText) {
         if (settings.mode === MODE.DRY_RUN) {
-            log('info', `🔍 [DRY-RUN] Would fill lyrics: "${promptText}"`);
+            log('info', `🔍 [DRY-RUN] Would fill prompt field: "${promptText}"`);
             if (stylesText) log('info', `🔍 [DRY-RUN] Would fill styles: "${stylesText}"`);
             if (titleText) log('info', `🔍 [DRY-RUN] Would fill title: "${titleText}"`);
             return;
         }
 
-        // --- Fill lyrics textarea (data-testid="lyrics-textarea") ---
+        // --- Fill dedicated prompt-like input, but never lyrics ---
         if (promptText) {
-            const lyricsResult = findBestCandidate(LYRICS_INPUT_CANDIDATES);
-            if (lyricsResult) {
-                fillInputElement(lyricsResult.element, promptText, 'lyrics');
+            const promptTarget = findPromptTargetInput();
+            if (promptTarget) {
+                fillInputElement(promptTarget, promptText, 'prompt');
             } else {
-                log('warn', '⚠️ Lyrics textarea not found — cannot fill');
+                log('warn', '⚠️ Prompt input not found — skipping prompt text to avoid filling lyrics');
             }
         }
 
@@ -1075,7 +1153,14 @@
         if (titleText) {
             const titleResult = findBestCandidate(TITLE_INPUT_CANDIDATES);
             if (titleResult) {
-                fillInputElement(titleResult.element, titleText, 'title');
+                const safeTitle = sanitizeTitleForInput(titleText, /** @type {HTMLElement} */ (titleResult.element));
+                if (safeTitle !== titleText) {
+                    log('info', '✂️ Title trimmed to input limit', {
+                        originalLength: titleText.length,
+                        finalLength: safeTitle.length,
+                    });
+                }
+                fillInputElement(titleResult.element, safeTitle, 'title');
             } else {
                 log('warn', '⚠️ Title input not found — cannot fill');
             }

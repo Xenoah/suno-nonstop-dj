@@ -286,6 +286,7 @@ Specifically:
 - diff the visible queue after generation to prefer the newly appeared card
 - avoid clicking the first generic Play button when switching
 - when the new card cannot be identified directly, fall back to an adjacent card relative to the current one, biased toward older -> latest progression
+- stop routing generated prompt text into the lyrics field; only fill a dedicated prompt-like field when one is safely identified
 
 This is the most important implementation shift since the initial MVP.
 
